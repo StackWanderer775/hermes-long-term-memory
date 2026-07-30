@@ -77,14 +77,14 @@ Create `D:\agent\auto_archive.py`. It should:
 1. Read exported Hermes session files from a configurable directory, defaulting to `Path.home() / ".hermes" / "exports"` or `D:/agent` on Windows
 2. Parse each line as a session JSON object
 3. Extract user/assistant turns, skip tool messages and empty content
-4. Deduplicate by **full MD5 hash** of content across all sessions
+4. Deduplicate by **full SHA256 hash** of content across all sessions
 5. Batch-insert into ChromaDB collection `hermes_conversations`
 6. Persist archive state to a configurable path, defaulting to `D:/agent/archive_state.json` on Windows or `~/.hermes/archive_state.json`
 
 Critical implementation rules:
 - **Paths must be configurable.** Read `EXPORT_DIR`, `STATE_FILE`, and `MEMORY_DIR` from environment variables first; fall back to cross-platform defaults. Do not hardcode `D:/agent` only.
 - **IDs must be globally unique.** Use the full content hash, e.g.
-  `c_{session_id[:12]}_{full_md5_hash}`. Truncated hashes collide across sessions.
+  `c_{session_id[:12]}_{full_sha256_hash}`. Truncated hashes collide across sessions.
 - **State file must be JSON-serializable.** Store hashes in a `list`, not a `set`.
 - **Batch inserts fail on duplicate IDs.** Deduplicate before calling `collection.add()`.
 - **Guard collection usage.** If `init_memory()` returns `None`, stop archiving and print a clear error instead of crashing later.
@@ -161,7 +161,7 @@ python D:\agent\memory_ai.py config
 
 ## Troubleshooting
 
-- **"Expected IDs to be unique"** → You truncated the hash. Use the full MD5.
+- **"Expected IDs to be unique"** → You truncated the hash. Use the full SHA256.
 - **"Object of type set is not JSON serializable"** → State file uses `set`; switch to `list`.
 - **BigModel embedding returns 400** → BigModel does not expose OpenAI-compatible
   `/v1/embeddings`. Switch to ChromaDB's local `DefaultEmbeddingFunction`.

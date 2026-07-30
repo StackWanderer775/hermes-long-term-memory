@@ -44,7 +44,7 @@
                            │
                     ┌──────▼───────┐
                     │ Deduplicate  │
-                    │ (MD5 hash)   │
+                    │ (SHA256 hash)   │
                     └──────┬───────┘
                            │
                     ┌──────▼───────┐
@@ -199,7 +199,7 @@ Response (with memory context)
 
 **Tradeoff**: 6-hour delay between conversation and archival.
 
-### Why MD5 Hash Deduplication?
+### Why SHA256 Hash Deduplication?
 
 - Fast, deterministic
 - Guaranteed uniqueness for identical content

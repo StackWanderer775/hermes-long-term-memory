@@ -1,6 +1,6 @@
 """
 带长期记忆的 AI 对话系统
-v0.4.0
+v0.5.0
 """
 import os
 import sys
@@ -128,8 +128,13 @@ def init_memory():
         return None, None, config
 
 
+def _content_hash(text: str) -> str:
+    """计算内容 SHA256 哈希"""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def add_memory(collection, content, memory_type="general"):
-    """添加记忆"""
+    """添加记忆（带去重）"""
     if not content or not content.strip():
         return None
 
@@ -138,15 +143,27 @@ def add_memory(collection, content, memory_type="general"):
         return None
 
     try:
+        text = content.strip()
+        content_hash_value = _content_hash(text)
+
+        # 先查是否已存在相同内容（通过 metadata hash 精确匹配）
+        existing = collection.get(
+            where={"hash": content_hash_value},
+            limit=1
+        )
+        if existing and existing.get("ids"):
+            logger.debug("内容已存在，跳过重复写入")
+            return existing["ids"][0]
+
         metadata = {
             "timestamp": datetime.now().isoformat(),
-            "type": memory_type
+            "type": memory_type,
+            "hash": content_hash_value
         }
-        # 使用 UUID 避免高并发碰撞
         memory_id = f"mem_{uuid.uuid4().hex}"
 
         collection.add(
-            documents=[content.strip()],
+            documents=[text],
             metadatas=[metadata],
             ids=[memory_id]
         )
@@ -173,9 +190,9 @@ def search_memories(collection, query, n_results=3, relevance_threshold=0.3):
                 metadata = results["metadatas"][0][i] if results.get("metadatas") else {}
                 distance = results["distances"][0][i] if results.get("distances") else 0
 
-                # ChromaDB cosine 距离范围为 [0, 2]，不做强制归一化
-                # 仅在展示时给出相对相似度参考
-                similarity = max(0.0, 1 - distance)
+                # ChromaDB cosine 距离范围为 [0, 2]，
+                #  similarity = max(0.0, 1 - distance/2)，避免负值
+                similarity = max(0.0, 1 - distance / 2)
 
                 # 阈值过滤：低于 threshold 的不返回
                 if similarity < relevance_threshold:
@@ -267,7 +284,7 @@ def main():
     """主函数"""
     if len(sys.argv) < 2:
         print("""
-🧠 带记忆的 AI 对话系统 v0.4.0
+🧠 带记忆的 AI 对话系统 v0.5.0
 
 用法:
   python memory_ai.py init-memory             初始化记忆系统
@@ -365,7 +382,7 @@ def main():
         relevance_threshold = mem_config.get("relevance_threshold", 0.3)
 
         print(f"""
-🧠 带记忆的 AI 对话系统 v0.4.0
+🧠 带记忆的 AI 对话系统 v0.5.0
 模型: {chat_config['model']}
 记忆: {'✅ 已连接' if collection else '❌ 未连接'}
 记忆条数限制: {max_items} 条
@@ -433,7 +450,7 @@ def main():
                 answer = response.choices[0].message.content
                 print(f"\nAI: {answer}")
 
-                # 自动保存对话到记忆
+                # 自动保存对话到记忆（带去重）
                 if collection:
                     add_memory(collection, f"用户: {user_input}", "dialogue")
                     add_memory(collection, f"AI: {answer}", "dialogue")
@@ -484,7 +501,7 @@ def main():
         print(f"\n问题: {question}")
         print(f"\n答案: {answer}")
 
-        # 自动保存
+        # 自动保存（带去重）
         if collection:
             add_memory(collection, f"用户: {question}", "dialogue")
             add_memory(collection, f"AI: {answer}", "dialogue")
@@ -532,7 +549,7 @@ def main():
 
     # 查看配置
     elif command == "config":
-        print("📋 记忆系统配置 v0.4.0")
+        print("📋 记忆系统配置 v0.5.0")
         mem_config = load_json(MEMORY_CONFIG_FILE, DEFAULT_MEMORY_CONFIG)
         chat_config = load_json(CHAT_CONFIG_FILE, DEFAULT_CHAT_CONFIG)
 

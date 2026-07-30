@@ -1,12 +1,13 @@
 """
 Hermes 会话自动存档到 ChromaDB
-v0.4.0
+v0.5.0
 """
 import os
 import sys
 import json
 import hashlib
 import logging
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -54,26 +55,35 @@ def init_chromadb():
 
 def _acquire_lock(lock_path):
     """获取文件锁（使用 portalocker，支持超时与 stale-lock 清理）"""
-    if portalocker is None:
-        # 降级到旧版 lock 文件机制
+    start = time.time()
+    while True:
+        if portalocker is None:
+            # 降级到旧版 lock 文件机制
+            try:
+                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+                return fd, True
+            except FileExistsError:
+                if time.time() - start >= LOCK_TIMEOUT:
+                    logger.warning(f"获取锁超时 ({LOCK_TIMEOUT}s)，跳过本次状态更新")
+                    return None, False
+                time.sleep(0.5)
+                continue
+            except Exception as e:
+                logger.debug(f"获取锁失败: {e}")
+                return None, False
+
         try:
-            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+            fd = open(lock_path, "w")
+            portalocker.lock(fd, portalocker.LOCK_EX | portalocker.LOCK_NB)
             return fd, True
-        except FileExistsError:
-            return None, False
+        except portalocker.LockException:
+            if time.time() - start >= LOCK_TIMEOUT:
+                logger.warning(f"获取锁超时 ({LOCK_TIMEOUT}s)，跳过本次状态更新")
+                return None, False
+            time.sleep(0.5)
         except Exception as e:
             logger.debug(f"获取锁失败: {e}")
             return None, False
-
-    try:
-        fd = open(lock_path, "w")
-        portalocker.lock(fd, portalocker.LOCK_EX | portalocker.LOCK_NB)
-        return fd, True
-    except portalocker.LockException:
-        return None, False
-    except Exception as e:
-        logger.debug(f"获取锁失败: {e}")
-        return None, False
 
 
 def _release_lock(lock_handle, lock_path):
@@ -83,8 +93,11 @@ def _release_lock(lock_handle, lock_path):
         try:
             if portalocker is not None:
                 portalocker.unlock(fd)
-            fd.close()
-        except OSError:
+            if isinstance(fd, int):
+                os.close(fd)
+            else:
+                fd.close()
+        except (OSError, AttributeError):
             pass
         if not is_atomic:
             try:
@@ -209,7 +222,7 @@ def generate_id(session_id: str, content_hash_value: str) -> str:
 
 def archive(max_per_session=100, dry_run=False):
     """主存档函数"""
-    print("🧠 Hermes 会话自动存档 v0.4.0")
+    print("🧠 Hermes 会话自动存档 v0.5.0")
     print("=" * 50)
     logger.info(f"记忆库: {MEMORY_DIR}")
     logger.info(f"导出目录: {EXPORT_DIR}")
@@ -220,7 +233,7 @@ def archive(max_per_session=100, dry_run=False):
     if not export_files:
         print(f"❌ 没找到导出文件 {EXPORT_DIR}/hermes_sessions*.jsonl")
         print(f"   先运行: hermes sessions export {EXPORT_DIR}/hermes_sessions.jsonl")
-        return
+        sys.exit(1)
 
     print(f"📁 导出文件: {[f.name for f in export_files]}")
 
@@ -374,7 +387,7 @@ def stats():
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Hermes 会话自动存档 v0.4.0")
+    parser = argparse.ArgumentParser(description="Hermes 会话自动存档 v0.5.0")
     parser.add_argument("--dry-run", action="store_true", help="预览不写入")
     parser.add_argument("--stats", action="store_true", help="查看统计")
     parser.add_argument("--max", type=int, default=100, help="每会话最多取多少条")

@@ -193,7 +193,7 @@ This enables:
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ 5. Deduplicate                                              │
-│    - MD5 hash of content                                    │
+│    - SHA256 hash of content                                    │
 │    - Check against archive_state.json                       │
 │    - Skip if already archived                               │
 └────────────────────┬────────────────────────────────────────┘
@@ -221,18 +221,18 @@ This enables:
 
 ```python
 def content_hash(text):
-    return hashlib.md5(text.encode("utf-8")).hexdigest()
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 def is_archived(conv, state):
     h = content_hash(conv["content"])
     return h in state.get("archived_hashes", [])
 ```
 
-**Why MD5?**
+**Why SHA256?**
 - Fast: O(n) for single hash
 - Deterministic: same content = same hash
-- Collision-resistant for personal use (< 1M memories)
-- 32-char hex string, easy to store/compare
+- Stronger collision resistance than MD5
+- 64-char hex string, safe for long-term use
 
 ### Batch Insert
 
@@ -254,11 +254,11 @@ for i in range(0, len(convos), BATCH_SIZE):
 - Allows progress tracking
 
 ### Relevance Filtering
-
 ```python
-relevance = 1 - distance  # ChromaDB returns cosine distance
-if relevance > 0.3:  # 30% threshold
+similarity = max(0.0, 1 - distance / 2)  # cosine distance in [0, 2]
+if similarity > 0.3:  # 30% similarity threshold
     # Use this memory
+    pass
 ```
 
 **Why 30%?**
