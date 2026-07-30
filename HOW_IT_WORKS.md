@@ -7,7 +7,7 @@ This script reads exported Hermes sessions and stores them in ChromaDB.
 ### Input
 
 ```powershell
-hermes sessions export --format jsonl D:/agent/hermes_sessions.jsonl
+hermes sessions export --format jsonl ~/.hermes/exports/hermes_sessions.jsonl
 ```
 
 This creates a JSONL file where each line is a session object:
@@ -29,7 +29,7 @@ This creates a JSONL file where each line is a session object:
 
 ```python
 # 1. Parse JSONL
-sessions = parse_jsonl("D:/agent/hermes_sessions.jsonl")
+sessions = parse_jsonl(os.environ.get("HERMES_EXPORT_DIR", Path.home() / ".hermes" / "exports") + "/hermes_sessions.jsonl")
 
 # 2. Extract conversations
 for session in sessions:

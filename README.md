@@ -29,7 +29,7 @@ memory_ai.py → 带记忆的回答
 - **自动存档**：通过 Hermes cron 定时导出对话并存入 ChromaDB
 - **语义搜索**：基于 ChromaDB 向量搜索，理解语义而非关键词
 - **完全本地**：Embedding 模型本地运行，数据不离开你的电脑
-- **零外部依赖**：不需要注册任何服务，不需要 API Key
+- **零外部依赖**：默认不需要注册任何服务，不需要 API Key
 - **即插即用**：安装 skill 后自动生效，对话自动触发记忆检索
 
 ### 架构
@@ -60,7 +60,7 @@ memory_ai.py → 带记忆的回答
 | 记忆检索 Skill | `skills/hermes-long-term-memory/SKILL.md` | 告诉 Hermes 何时/如何查询记忆 |
 | 自动存档脚本 | `auto_archive.py` | 解析导出的会话，存入 ChromaDB |
 | 对话脚本 | `memory_ai.py` | 独立运行的带记忆的聊天程序 |
-| 存档状态 | `D:/agent/archive_state.json` | 记录已存档的对话哈希，避免重复 |
+| 存档状态 | `~/.hermes/exports/archive_state.json` | 记录已存档的对话哈希，避免重复 |
 
 ### 快速开始
 
@@ -73,7 +73,7 @@ memory_ai.py → 带记忆的回答
 #### 1. 安装依赖
 
 ```powershell
-pip install chromadb openai
+pip install -r requirements.txt
 ```
 
 #### 2. 安装 Skill
@@ -90,13 +90,13 @@ hermes skills install path/to/skills/hermes-long-term-memory
 
 ```powershell
 # 导出所有历史会话到 JSONL
-hermes sessions export --format jsonl D:/agent/hermes_sessions.jsonl
+hermes sessions export --format jsonl ~/.hermes/exports/hermes_sessions.jsonl
 ```
 
 #### 4. 首次存档
 
 ```powershell
-python D:/agent/auto_archive.py
+python auto_archive.py
 ```
 
 #### 5. 设置自动存档
@@ -137,13 +137,15 @@ Hermes 检测到可能需要记忆
 ```
 hermes-long-term-memory/
 ├── README.md                  # 本文件
-├── SKILL.md                   # Hermes skill 定义
-├── memory_ai.py               # 独立聊天程序（带记忆检索）
-├── auto_archive.py            # 自动存档脚本
 ├── ARCHITECTURE.md            # 架构详解
 ├── HOW_IT_WORKS.md            # 工作原理
-└── scripts/                   # 脚本目录
-    └── auto_archive.py        # cron 使用的脚本副本
+├── memory_ai.py               # 独立聊天程序（带记忆检索）
+├── auto_archive.py            # 自动存档脚本
+├── requirements.txt           # Python 依赖
+├── LICENSE                    # MIT 许可证
+└── skills/                    # Hermes skill 目录
+    └── hermes-long-term-memory/
+        └── SKILL.md           # Hermes skill 定义
 ```
 
 ### 工作原理
@@ -152,12 +154,38 @@ hermes-long-term-memory/
 
 ### 配置
 
-记忆库默认位置：`C:\Users\<you>\.hermes\memory_db\`
+记忆库默认位置：`~/.hermes/memory_db/`
 
 可通过环境变量修改：
+
 ```powershell
-$env:MEMORY_DIR = "D:/custom/memory_db"
+# Windows PowerShell
+$env:HERMES_MEMORY_DIR = "D:/custom/memory_db"
+
+# Linux/macOS
+export HERMES_MEMORY_DIR="$HOME/.hermes/memory_db"
 ```
+
+可用环境变量：
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `HERMES_MEMORY_DIR` | `~/.hermes/memory_db` | 记忆库目录 |
+| `HERMES_COLLECTION_NAME` | `hermes_conversations` | ChromaDB 集合名 |
+| `HERMES_EXPORT_DIR` | `~/.hermes/exports` | 会话导出目录 |
+| `HERMES_MEMORY_CONFIG` | `~/.hermes/memory_config.json` | 记忆配置路径 |
+| `HERMES_CHAT_CONFIG` | `~/.hermes/chat_config.json` | 对话配置路径 |
+
+### Embedding 模式
+
+支持两种 embedding 模式：
+
+| 模式 | 说明 | 需要 |
+|---|---|---|
+| `local` | 本地运行，无需 API Key | 首次下载约 79MB |
+| `openai` | 使用 OpenAI 兼容 API | 需要 API Key |
+
+在 `memory_ai.py init-memory` 时选择，或手动编辑 `~/.hermes/memory_config.json`。
 
 ### 隐私说明
 
@@ -170,10 +198,11 @@ $env:MEMORY_DIR = "D:/custom/memory_db"
 
 | 问题 | 解决 |
 |---|---|
-| ChromaDB 导入失败 | `pip install chromadb` |
+| ChromaDB 导入失败 | `pip install -r requirements.txt` |
 | 记忆检索不到结果 | 确保已运行 `auto_archive.py` |
 | cron 任务不执行 | 检查 `hermes cron status`，Gateway 需运行 |
 | 中文语义不准 | 当前 Embedding 模型英文训练，中文精度有限 |
+| 路径错误 | 检查环境变量 `HERMES_EXPORT_DIR` |
 
 ### 对比 Hermes 原生记忆插件
 
@@ -197,24 +226,8 @@ A long-term memory system for Hermes Agent. Uses ChromaDB + local Embedding to a
 ### Quick Start
 
 ```powershell
-pip install chromadb openai
-cp -r skills/hermes-long-term-memory $env:APPDATA\hermes\skills\
-hermes sessions export --format jsonl D:/agent/hermes_sessions.jsonl
-python D:/agent/auto_archive.py
-```
-
-### Architecture
-
-```
-Hermes conversation
-    ↓ auto-export (cron)
-JSONL
-    ↓ parse + deduplicate + embed
-auto_archive.py
-    ↓ store
-ChromaDB (~/.hermes/memory_db)
-    ↓ semantic query
-memory_ai.py → context-aware response
+pip install -r requirements.txt
+python auto_archive.py
 ```
 
 ### Documentation

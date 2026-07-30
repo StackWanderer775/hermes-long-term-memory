@@ -56,7 +56,7 @@
 
 **Script**: `auto_archive.py`
 
-**Input**: `D:/agent/hermes_sessions*.jsonl` (exported by `hermes sessions export`)
+**Input**: `~/.hermes/exports/hermes_sessions*.jsonl` (exported by `hermes sessions export`)
 
 **Output**: ChromaDB collection `hermes_conversations`
 
