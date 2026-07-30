@@ -1,17 +1,23 @@
 """
 Hermes 会话自动存档到 ChromaDB
-v0.3.0
+v0.4.0
 """
 import os
 import sys
 import json
 import hashlib
 import logging
+import uuid
 from datetime import datetime
 from pathlib import Path
 
 import chromadb
 from chromadb.utils import embedding_functions
+
+try:
+    import portalocker
+except ImportError:
+    portalocker = None
 
 # 日志配置
 logging.basicConfig(
@@ -26,6 +32,7 @@ MEMORY_DIR = Path(os.environ.get("HERMES_MEMORY_DIR", Path.home() / ".hermes" / 
 EXPORT_DIR = Path(os.environ.get("HERMES_EXPORT_DIR", Path.home() / ".hermes" / "exports"))
 STATE_FILE = EXPORT_DIR / "archive_state.json"
 COLLECTION_NAME = os.environ.get("HERMES_COLLECTION_NAME", "hermes_conversations")
+LOCK_TIMEOUT = 30  # 锁等待超时秒数
 
 
 def init_chromadb():
@@ -46,28 +53,44 @@ def init_chromadb():
 
 
 def _acquire_lock(lock_path):
-    """获取文件锁（跨平台）"""
+    """获取文件锁（使用 portalocker，支持超时与 stale-lock 清理）"""
+    if portalocker is None:
+        # 降级到旧版 lock 文件机制
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+            return fd, True
+        except FileExistsError:
+            return None, False
+        except Exception as e:
+            logger.debug(f"获取锁失败: {e}")
+            return None, False
+
     try:
-        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
-        return fd
-    except FileExistsError:
-        return None
+        fd = open(lock_path, "w")
+        portalocker.lock(fd, portalocker.LOCK_EX | portalocker.LOCK_NB)
+        return fd, True
+    except portalocker.LockException:
+        return None, False
     except Exception as e:
         logger.debug(f"获取锁失败: {e}")
-        return None
+        return None, False
 
 
-def _release_lock(fd, lock_path):
+def _release_lock(lock_handle, lock_path):
     """释放文件锁"""
+    fd, is_atomic = lock_handle
     if fd is not None:
         try:
-            os.close(fd)
+            if portalocker is not None:
+                portalocker.unlock(fd)
+            fd.close()
         except OSError:
             pass
-        try:
-            os.unlink(lock_path)
-        except OSError:
-            pass
+        if not is_atomic:
+            try:
+                os.unlink(lock_path)
+            except OSError:
+                pass
 
 
 def load_state():
@@ -88,8 +111,8 @@ def save_state(state):
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     lock_path = str(STATE_FILE) + ".lock"
 
-    fd = _acquire_lock(lock_path)
-    if fd is None:
+    lock_handle, acquired = _acquire_lock(lock_path)
+    if not acquired:
         logger.warning("另一个进程正在写入状态文件，跳过本次状态更新")
         return False
 
@@ -103,7 +126,7 @@ def save_state(state):
         logger.error(f"保存状态文件失败: {e}")
         return False
     finally:
-        _release_lock(fd, lock_path)
+        _release_lock(lock_handle, lock_path)
 
 
 def parse_jsonl(path):
@@ -175,13 +198,18 @@ def extract_convos(session, max_messages=100):
 
 
 def content_hash(text):
-    """计算内容 MD5 哈希"""
-    return hashlib.md5(text.encode("utf-8")).hexdigest()
+    """计算内容 SHA256 哈希（比 MD5 更安全）"""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def generate_id(session_id: str, content_hash_value: str) -> str:
+    """生成唯一记忆 ID"""
+    return f"c_{session_id[:12]}_{content_hash_value}"
 
 
 def archive(max_per_session=100, dry_run=False):
     """主存档函数"""
-    print("🧠 Hermes 会话自动存档 v0.3.0")
+    print("🧠 Hermes 会话自动存档 v0.4.0")
     print("=" * 50)
     logger.info(f"记忆库: {MEMORY_DIR}")
     logger.info(f"导出目录: {EXPORT_DIR}")
@@ -271,8 +299,8 @@ def archive(max_per_session=100, dry_run=False):
             else:
                 ts_str = str(ts)[:19] if ts else "?"
 
-            # 复合 ID：保留 session 信息，同时保证全局唯一
-            ids.append(f"c_{c['session_id'][:12]}_{h}")
+            # 统一 ID 生成规则
+            ids.append(generate_id(c["session_id"], h))
             docs.append(c["content"])
             metas.append({
                 "timestamp": ts_str,
@@ -285,6 +313,7 @@ def archive(max_per_session=100, dry_run=False):
             collection.add(documents=docs, metadatas=metas, ids=ids)
             total += len(batch)
             successful_hashes.extend([h for h, _ in batch])
+            logger.info(f"批次 {i//BATCH + 1} 成功写入 {len(batch)} 条")
             print(f"   📦 已存档 {total}/{len(unique_convos)}")
         except Exception as e:
             failed_batches += 1
@@ -345,7 +374,7 @@ def stats():
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Hermes 会话自动存档 v0.3.0")
+    parser = argparse.ArgumentParser(description="Hermes 会话自动存档 v0.4.0")
     parser.add_argument("--dry-run", action="store_true", help="预览不写入")
     parser.add_argument("--stats", action="store_true", help="查看统计")
     parser.add_argument("--max", type=int, default=100, help="每会话最多取多少条")

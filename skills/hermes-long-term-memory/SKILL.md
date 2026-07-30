@@ -30,8 +30,10 @@ memory_ai.py  →  retrieve memories → build prompt → call LLM
 - **Storage:** ChromaDB `PersistentClient` at `~/.hermes/memory_db`
 - **Embedding:** local `DefaultEmbeddingFunction` only (`all-MiniLM-L6-v2`, 384-dim). Do not use `OpenAIEmbeddingFunction`; BigModel does not expose a compatible `/v1/embeddings` for `text-embedding-3-small`, and local embedding is free and offline-capable.
 - **LLM:** any OpenAI-compatible chat API (BigModel, Agnes, etc.)
-- **Schedule:** Hermes `cron create` with `--script ... --no-agent`
+- **Schedule:** Hermes `cron create` with `--script auto_archive.py --no-agent`
 - **Collection name:** `hermes_conversations` — this must match between `auto_archive.py` and `memory_ai.py`.
+- **Deduplication:** SHA256 content hash, with failed-batch retry and atomic state updates.
+- **Concurrency:** `archive_state.json` updates use file locking via `portalocker` when available.
 
 ## Prerequisites
 

@@ -1,11 +1,12 @@
 """
 带长期记忆的 AI 对话系统
-v0.3.0
+v0.4.0
 """
 import os
 import sys
 import json
 import time
+import uuid
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -42,7 +43,8 @@ DEFAULT_MEMORY_CONFIG = {
     "collection_name": COLLECTION_NAME,
     "max_memories": 1000,
     "max_memory_items": 5,
-    "max_memory_chars": 200
+    "max_memory_chars": 200,
+    "relevance_threshold": 0.3  # 相似度阈值，低于此值不注入
 }
 
 DEFAULT_CHAT_CONFIG = {
@@ -140,7 +142,8 @@ def add_memory(collection, content, memory_type="general"):
             "timestamp": datetime.now().isoformat(),
             "type": memory_type
         }
-        memory_id = f"mem_{int(time.time() * 1000)}"
+        # 使用 UUID 避免高并发碰撞
+        memory_id = f"mem_{uuid.uuid4().hex}"
 
         collection.add(
             documents=[content.strip()],
@@ -153,8 +156,8 @@ def add_memory(collection, content, memory_type="general"):
         return None
 
 
-def search_memories(collection, query, n_results=3):
-    """搜索相关记忆"""
+def search_memories(collection, query, n_results=3, relevance_threshold=0.3):
+    """搜索相关记忆（带阈值过滤）"""
     if not query or not collection:
         return []
 
@@ -173,6 +176,11 @@ def search_memories(collection, query, n_results=3):
                 # ChromaDB cosine 距离范围为 [0, 2]，不做强制归一化
                 # 仅在展示时给出相对相似度参考
                 similarity = max(0.0, 1 - distance)
+
+                # 阈值过滤：低于 threshold 的不返回
+                if similarity < relevance_threshold:
+                    logger.debug(f"跳过低相似度记忆: {similarity:.2f} < {relevance_threshold}")
+                    continue
 
                 memories.append({
                     "content": doc,
@@ -259,7 +267,7 @@ def main():
     """主函数"""
     if len(sys.argv) < 2:
         print("""
-🧠 带记忆的 AI 对话系统 v0.3.0
+🧠 带记忆的 AI 对话系统 v0.4.0
 
 用法:
   python memory_ai.py init-memory             初始化记忆系统
@@ -274,6 +282,7 @@ def main():
   HERMES_COLLECTION_NAME  集合名称 (默认: hermes_conversations)
   HERMES_EXPORT_DIR       导出目录 (默认: ~/.hermes/exports)
   HERMES_CHAT_API_KEY     对话 API Key（优先于配置文件）
+  HERMES_OPENAI_API_KEY   OpenAI Embedding API Key
 
 示例:
   python memory_ai.py init-memory
@@ -353,12 +362,14 @@ def main():
 
         max_items = mem_config.get("max_memory_items", 5)
         max_chars = mem_config.get("max_memory_chars", 200)
+        relevance_threshold = mem_config.get("relevance_threshold", 0.3)
 
         print(f"""
-🧠 带记忆的 AI 对话系统 v0.3.0
+🧠 带记忆的 AI 对话系统 v0.4.0
 模型: {chat_config['model']}
 记忆: {'✅ 已连接' if collection else '❌ 未连接'}
 记忆条数限制: {max_items} 条
+相似度阈值: {relevance_threshold:.0%}
 输入 'quit' 退出，输入 'remember xxx' 添加记忆
         """)
 
@@ -384,8 +395,11 @@ def main():
                     print("❌ 添加记忆失败（记忆系统未连接）")
                 continue
 
-            # 搜索相关记忆
-            memories = search_memories(collection, user_input, n_results=max_items)
+            # 搜索相关记忆（带阈值过滤）
+            memories = search_memories(
+                collection, user_input, n_results=max_items,
+                relevance_threshold=relevance_threshold
+            )
 
             # 显示检索到的记忆
             if memories:
@@ -445,9 +459,13 @@ def main():
 
         max_items = mem_config.get("max_memory_items", 5)
         max_chars = mem_config.get("max_memory_chars", 200)
+        relevance_threshold = mem_config.get("relevance_threshold", 0.3)
 
-        # 搜索记忆
-        memories = search_memories(collection, question, n_results=max_items)
+        # 搜索记忆（带阈值过滤）
+        memories = search_memories(
+            collection, question, n_results=max_items,
+            relevance_threshold=relevance_threshold
+        )
 
         # 调用 LLM
         answer = chat_with_memory(
@@ -514,7 +532,7 @@ def main():
 
     # 查看配置
     elif command == "config":
-        print("📋 记忆系统配置 v0.3.0")
+        print("📋 记忆系统配置 v0.4.0")
         mem_config = load_json(MEMORY_CONFIG_FILE, DEFAULT_MEMORY_CONFIG)
         chat_config = load_json(CHAT_CONFIG_FILE, DEFAULT_CHAT_CONFIG)
 
@@ -533,6 +551,10 @@ def main():
         env_api_key = os.environ.get("HERMES_CHAT_API_KEY")
         if env_api_key:
             print(f"\n[环境变量] HERMES_CHAT_API_KEY: {_mask_key(env_api_key)} (active)")
+
+        env_openai_key = os.environ.get("HERMES_OPENAI_API_KEY")
+        if env_openai_key:
+            print(f"[环境变量] HERMES_OPENAI_API_KEY: {_mask_key(env_openai_key)} (active)")
 
         print(f"\n📁 记忆存储: {MEMORY_DIR}")
         print(f"📄 记忆配置: {MEMORY_CONFIG_FILE}")

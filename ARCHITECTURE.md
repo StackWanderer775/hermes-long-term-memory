@@ -65,10 +65,10 @@
 2. Parse each line as a session object
 3. Extract user/assistant conversations (skip tool messages, empty content)
 4. Merge consecutive same-role messages
-5. Deduplicate by full MD5 hash of content
-6. Generate unique IDs: `c_{session_id[:12]}_{md5_hash}`
+5. Deduplicate by full SHA256 hash of content
+6. Generate unique IDs: `c_{session_id[:12]}_{sha256_hash}`
 7. Batch insert into ChromaDB with metadata (timestamp, role, session_id)
-8. Update archive state to track what's been stored
+8. Update archive state only for successfully written batches; failed batches retain hashes for retry
 
 ### 2. Memory Retrieval Pipeline (Read Path)
 
@@ -95,7 +95,7 @@
 
 **Query**: `collection.query(query_texts=[user_message], n_results=5)`
 
-**Filter**: Only use results with relevance > 30%
+**Filter**: Only inject results above `relevance_threshold` (default `0.3`); lower-similarity memories are discarded to avoid polluting the prompt.
 
 **Injection**: Weave memories naturally into answer (no "According to my memory...")
 

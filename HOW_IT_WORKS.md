@@ -41,7 +41,7 @@ for session in sessions:
 seen_hashes = set()
 unique_convos = []
 for c in convos:
-    h = md5(c["content"])
+    h = sha256(c["content"])
     if h not in seen_hashes:
         seen_hashes.add(h)
         unique_convos.append(c)
@@ -59,12 +59,13 @@ collection.add(
 )
 ```
 
-### Why MD5 Hash as ID?
+### Why SHA256 Hash as ID?
 
-ChromaDB requires unique IDs. Using the full MD5 hash of content ensures:
+ChromaDB requires unique IDs. Using the full SHA256 hash of content ensures:
 - Global uniqueness across all sessions
 - Idempotency: re-running the script won't create duplicates
 - Fast deduplication: O(1) hash lookup
+- Stronger collision resistance than MD5
 
 ## 2. Memory Retrieval: Skill Trigger
 
@@ -129,7 +130,7 @@ Hermes cron runs `auto_archive.py` every 6 hours:
 ```powershell
 hermes cron create \
   --name "自动存档对话到记忆库" \
-  --script "scripts/auto_archive.py" \
+  --script "auto_archive.py" \
   --no-agent \
   --deliver local \
   "every 6h" \

@@ -60,7 +60,7 @@ memory_ai.py → 带记忆的回答
 | 记忆检索 Skill | `skills/hermes-long-term-memory/SKILL.md` | 告诉 Hermes 何时/如何查询记忆 |
 | 自动存档脚本 | `auto_archive.py` | 解析导出的会话，存入 ChromaDB |
 | 对话脚本 | `memory_ai.py` | 独立运行的带记忆的聊天程序 |
-| 存档状态 | `~/.hermes/exports/archive_state.json` | 记录已存档的对话哈希，避免重复 |
+| 存档状态 | `~/.hermes/exports/archive_state.json` | 记录已存档的对话哈希，失败批次保留待重试 |
 
 ### 快速开始
 
@@ -105,7 +105,7 @@ python auto_archive.py
 # 创建 cron 任务（每 6 小时自动存档）
 hermes cron create \
   --name "自动存档对话到记忆库" \
-  --script "scripts/auto_archive.py" \
+  --script "auto_archive.py" \
   --no-agent \
   --deliver local \
   "every 6h" \
@@ -203,11 +203,12 @@ export HERMES_MEMORY_DIR="$HOME/.hermes/memory_db"
 | 问题 | 解决 |
 |---|---|
 | ChromaDB 导入失败 | `pip install -r requirements.txt` |
-| 记忆检索不到结果 | 确保已运行 `auto_archive.py` |
+| 记忆检索不到结果 | 确保已运行 `auto_archive.py`；检查 `relevance_threshold` 是否过高 |
 | cron 任务不执行 | 检查 `hermes cron status`，Gateway 需运行 |
 | 中文语义不准 | 当前 Embedding 模型英文训练，中文精度有限 |
 | 路径错误 | 检查环境变量 `HERMES_EXPORT_DIR` |
 | 状态文件损坏 | 删除 `archive_state.json`，下次运行会自动重建 |
+| 记忆结果无关 | 可调低 `memory_config.json` 中的 `relevance_threshold` |
 
 ### 对比 Hermes 原生记忆插件
 
