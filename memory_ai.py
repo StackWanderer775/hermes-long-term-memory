@@ -1,13 +1,22 @@
 """
 带长期记忆的 AI 对话系统
-v0.2.0
+v0.3.0
 """
 import os
 import sys
 import json
 import time
+import logging
 from pathlib import Path
 from datetime import datetime
+
+# 日志配置
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S"
+)
+logger = logging.getLogger(__name__)
 
 # 检查依赖
 try:
@@ -16,7 +25,7 @@ try:
     from openai import OpenAI
 except ImportError as e:
     print(f"❌ 缺少依赖: {e}")
-    print("请运行: pip install chromadb openai")
+    print("请运行: pip install -r requirements.txt")
     sys.exit(1)
 
 # 路径配置（支持跨平台 + 环境变量）
@@ -32,8 +41,8 @@ DEFAULT_MEMORY_CONFIG = {
     "embedding_model": "text-embedding-3-small",
     "collection_name": COLLECTION_NAME,
     "max_memories": 1000,
-    "max_memory_items": 5,  # 检索时最多返回条数
-    "max_memory_chars": 200  # 单条记忆最大字符数
+    "max_memory_items": 5,
+    "max_memory_chars": 200
 }
 
 DEFAULT_CHAT_CONFIG = {
@@ -46,14 +55,31 @@ DEFAULT_CHAT_CONFIG = {
 }
 
 
+def _mask_key(key: str) -> str:
+    """脱敏 API Key，仅显示前 6 位和后 4 位"""
+    if not key or len(key) < 10:
+        return "***"
+    return f"{key[:6]}...{key[-4:]}"
+
+
+def _get_chat_api_key(config: dict) -> str:
+    """
+    获取对话 API Key：优先环境变量，其次配置文件。
+    注意：为避免泄露，不要在终端打印完整 key。
+    """
+    return os.environ.get("HERMES_CHAT_API_KEY", config.get("api_key", ""))
+
+
 def load_json(path, defaults):
     """加载 JSON 配置"""
     if path.exists():
         try:
             with open(path, "r", encoding="utf-8") as f:
                 return {**defaults, **json.load(f)}
+        except json.JSONDecodeError as e:
+            logger.error(f"配置 JSON 格式错误 {path}: {e}")
         except Exception as e:
-            print(f"⚠️ 读取配置失败 {path}: {e}")
+            logger.warning(f"读取配置失败 {path}: {e}")
     return defaults.copy()
 
 
@@ -67,29 +93,28 @@ def save_json(path, data):
 def create_embedding_function(config):
     """根据配置创建 embedding 函数"""
     backend = config.get("embedding_backend", "local")
-    
+
     if backend == "openai":
-        api_key = config.get("openai_api_key", "")
+        api_key = config.get("openai_api_key", "") or os.environ.get("HERMES_OPENAI_API_KEY", "")
         if not api_key:
-            raise ValueError("OpenAI embedding backend 需要配置 openai_api_key")
+            raise ValueError("OpenAI embedding backend 需要配置 openai_api_key 或环境变量 HERMES_OPENAI_API_KEY")
         return embedding_functions.OpenAIEmbeddingFunction(
             api_key=api_key,
             model_name=config.get("embedding_model", "text-embedding-3-small")
         )
     else:
-        # 默认本地 embedding
         return embedding_functions.DefaultEmbeddingFunction()
 
 
 def init_memory():
     """初始化记忆系统"""
     config = load_json(MEMORY_CONFIG_FILE, DEFAULT_MEMORY_CONFIG)
-    
+
     try:
         MEMORY_DIR.mkdir(parents=True, exist_ok=True)
         client = chromadb.PersistentClient(path=str(MEMORY_DIR))
         embedding_fn = create_embedding_function(config)
-        
+
         collection = client.get_or_create_collection(
             name=config.get("collection_name", COLLECTION_NAME),
             embedding_function=embedding_fn,
@@ -97,7 +122,7 @@ def init_memory():
         )
         return client, collection, config
     except Exception as e:
-        print(f"❌ 记忆系统初始化失败: {e}")
+        logger.error(f"记忆系统初始化失败: {e}")
         return None, None, config
 
 
@@ -105,17 +130,18 @@ def add_memory(collection, content, memory_type="general"):
     """添加记忆"""
     if not content or not content.strip():
         return None
-    
+
     if collection is None:
+        logger.warning("记忆系统未连接，跳过写入")
         return None
-    
+
     try:
         metadata = {
             "timestamp": datetime.now().isoformat(),
             "type": memory_type
         }
         memory_id = f"mem_{int(time.time() * 1000)}"
-        
+
         collection.add(
             documents=[content.strip()],
             metadatas=[metadata],
@@ -123,7 +149,7 @@ def add_memory(collection, content, memory_type="general"):
         )
         return memory_id
     except Exception as e:
-        print(f"⚠️ 添加记忆失败: {e}")
+        logger.error(f"添加记忆失败: {e}")
         return None
 
 
@@ -131,27 +157,33 @@ def search_memories(collection, query, n_results=3):
     """搜索相关记忆"""
     if not query or not collection:
         return []
-    
+
     try:
         results = collection.query(
             query_texts=[query.strip()],
             n_results=n_results
         )
-        
+
         memories = []
         if results and results.get("documents"):
             for i, doc in enumerate(results["documents"][0]):
                 metadata = results["metadatas"][0][i] if results.get("metadatas") else {}
                 distance = results["distances"][0][i] if results.get("distances") else 0
+
+                # ChromaDB cosine 距离范围为 [0, 2]，不做强制归一化
+                # 仅在展示时给出相对相似度参考
+                similarity = max(0.0, 1 - distance)
+
                 memories.append({
                     "content": doc,
                     "timestamp": metadata.get("timestamp", "")[:19],
                     "type": metadata.get("type", "general"),
-                    "relevance": 1 - distance
+                    "relevance": similarity,
+                    "distance": distance
                 })
         return memories
     except Exception as e:
-        print(f"⚠️ 搜索记忆失败: {e}")
+        logger.error(f"搜索记忆失败: {e}")
         return []
 
 
@@ -169,38 +201,34 @@ def build_prompt_with_memories(memories, user_message, system_prompt, max_items=
     """把记忆拼接到 prompt 里（带长度控制）"""
     if not memories:
         return system_prompt
-    
-    # 限制记忆数量
+
     memories = memories[:max_items]
-    
-    # 构建记忆上下文
+
     memory_context = "\n## 相关记忆\n"
     for i, mem in enumerate(memories, 1):
         truncated = truncate_text(mem["content"], max_chars)
         memory_context += f"{i}. [{mem['timestamp']}] {truncated}\n"
     memory_context += "\n请参考以上记忆来回答用户的问题。\n"
-    
+
     return system_prompt + memory_context
 
 
-def chat_with_memory(api_base, api_key, model, user_message, memories, 
+def chat_with_memory(api_base, api_key, model, user_message, memories,
                      system_prompt, temperature=0.3, max_tokens=2000,
                      max_memory_items=5, max_memory_chars=200):
     """带记忆的对话"""
-    # 构建带记忆的 system prompt
     full_system_prompt = build_prompt_with_memories(
         memories, user_message, system_prompt,
         max_items=max_memory_items,
         max_chars=max_memory_chars
     )
-    
-    # 调用 LLM
+
     try:
         client = OpenAI(
             api_key=api_key,
             base_url=api_base
         )
-        
+
         response = client.chat.completions.create(
             model=model,
             messages=[
@@ -210,9 +238,10 @@ def chat_with_memory(api_base, api_key, model, user_message, memories,
             temperature=temperature,
             max_tokens=max_tokens
         )
-        
+
         return response.choices[0].message.content
     except Exception as e:
+        logger.error(f"LLM 对话失败: {e}")
         return f"❌ 对话失败: {e}"
 
 
@@ -223,14 +252,14 @@ def print_memories(memories):
         return
     for i, mem in enumerate(memories, 1):
         print(f"   {i}. [{mem['timestamp']}] {mem['content'][:80]}")
-        print(f"      相关性: {mem['relevance']:.1%}")
+        print(f"      相似度: {mem['relevance']:.1%}")
 
 
 def main():
     """主函数"""
     if len(sys.argv) < 2:
         print("""
-🧠 带记忆的 AI 对话系统 v0.2.0
+🧠 带记忆的 AI 对话系统 v0.3.0
 
 用法:
   python memory_ai.py init-memory             初始化记忆系统
@@ -244,6 +273,7 @@ def main():
   HERMES_MEMORY_DIR       记忆库目录 (默认: ~/.hermes/memory_db)
   HERMES_COLLECTION_NAME  集合名称 (默认: hermes_conversations)
   HERMES_EXPORT_DIR       导出目录 (默认: ~/.hermes/exports)
+  HERMES_CHAT_API_KEY     对话 API Key（优先于配置文件）
 
 示例:
   python memory_ai.py init-memory
@@ -253,18 +283,18 @@ def main():
   python memory_ai.py remember "用户在香港做 AI 开发"
         """)
         return
-    
+
     command = sys.argv[1].lower()
-    
+
     # 初始化记忆系统
     if command == "init-memory":
         print("🔧 初始化记忆系统...")
         config = load_json(MEMORY_CONFIG_FILE, DEFAULT_MEMORY_CONFIG)
-        
+
         print(f"Embedding 模式: {config.get('embedding_backend', 'local')}")
         print("  1. local (本地，无需 API Key)")
         print("  2. openai (需要 OpenAI API Key)")
-        
+
         backend_choice = input("选择模式 [1]: ").strip()
         if backend_choice == "2":
             config["embedding_backend"] = "openai"
@@ -273,10 +303,10 @@ def main():
         else:
             config["embedding_backend"] = "local"
             config.pop("openai_api_key", None)
-        
+
         save_json(MEMORY_CONFIG_FILE, config)
         print("✅ 记忆系统配置已保存")
-        
+
         # 测试
         try:
             _, collection, _ = init_memory()
@@ -288,61 +318,62 @@ def main():
                 print("❌ 连接失败")
         except Exception as e:
             print(f"❌ 测试失败: {e}")
-    
+
     # 初始化对话配置
     elif command == "init-chat":
         print("🔧 初始化对话配置...")
         config = load_json(CHAT_CONFIG_FILE, DEFAULT_CHAT_CONFIG)
         print(f"当前 API 地址: {config.get('api_base')}")
         print(f"当前模型: {config.get('model')}")
-        
+
         if not config.get("api_key"):
             config["api_key"] = input("请输入 API Key: ").strip()
-        
+
         api_base = input(f"API 地址 [{config.get('api_base')}]: ").strip()
         if api_base:
             config["api_base"] = api_base
-        
+
         model = input(f"模型名称 [{config.get('model')}]: ").strip()
         if model:
             config["model"] = model
-        
+
         save_json(CHAT_CONFIG_FILE, config)
         print("✅ 对话配置已保存")
-    
+        print("⚠️  安全提示：api_key 已明文保存。如需更安全，可使用环境变量 HERMES_CHAT_API_KEY")
+
     # 交互式对话
     elif command == "chat":
-        # 初始化
         _, collection, mem_config = init_memory()
         chat_config = load_json(CHAT_CONFIG_FILE, DEFAULT_CHAT_CONFIG)
-        
-        if not chat_config.get("api_key"):
-            print("❌ 请先运行 init-chat 配置 API Key")
+        api_key = _get_chat_api_key(chat_config)
+
+        if not api_key:
+            print("❌ 请先运行 init-chat 配置 API Key，或设置环境变量 HERMES_CHAT_API_KEY")
             return
-        
+
         max_items = mem_config.get("max_memory_items", 5)
         max_chars = mem_config.get("max_memory_chars", 200)
-        
+
         print(f"""
-🧠 带记忆的 AI 对话系统 v0.2.0
+🧠 带记忆的 AI 对话系统 v0.3.0
 模型: {chat_config['model']}
 记忆: {'✅ 已连接' if collection else '❌ 未连接'}
 记忆条数限制: {max_items} 条
 输入 'quit' 退出，输入 'remember xxx' 添加记忆
         """)
-        
+
         messages = [{"role": "system", "content": chat_config["system_prompt"]}]
-        
+
         while True:
             user_input = input("\n你: ").strip()
-            
+
             if not user_input:
                 continue
-            
+
             if user_input.lower() in ["quit", "exit", "退出"]:
                 print("👋 再见！")
                 break
-            
+
             # 特殊命令：添加记忆
             if user_input.startswith("remember "):
                 content = user_input[9:]
@@ -352,29 +383,29 @@ def main():
                 else:
                     print("❌ 添加记忆失败（记忆系统未连接）")
                 continue
-            
+
             # 搜索相关记忆
             memories = search_memories(collection, user_input, n_results=max_items)
-            
+
             # 显示检索到的记忆
             if memories:
                 print(f"\n📚 找到 {len(memories)} 条相关记忆:")
                 print_memories(memories)
-            
+
             # 构建带记忆的 prompt
             full_system_prompt = build_prompt_with_memories(
                 memories, user_input, chat_config["system_prompt"],
                 max_items=max_items,
                 max_chars=max_chars
             )
-            
+
             # 调用 LLM
             try:
                 client = OpenAI(
-                    api_key=chat_config["api_key"],
+                    api_key=api_key,
                     base_url=chat_config["api_base"]
                 )
-                
+
                 response = client.chat.completions.create(
                     model=chat_config["model"],
                     messages=[
@@ -384,38 +415,44 @@ def main():
                     temperature=chat_config.get("temperature", 0.3),
                     max_tokens=chat_config.get("max_tokens", 2000)
                 )
-                
+
                 answer = response.choices[0].message.content
                 print(f"\nAI: {answer}")
-                
+
                 # 自动保存对话到记忆
                 if collection:
                     add_memory(collection, f"用户: {user_input}", "dialogue")
                     add_memory(collection, f"AI: {answer}", "dialogue")
-                
+
             except Exception as e:
+                logger.error(f"对话失败: {e}")
                 print(f"❌ 对话失败: {e}")
-    
+
     # 单次提问
     elif command == "ask":
         if len(sys.argv) < 3:
             print("❌ 请提供问题")
             return
-        
+
         question = " ".join(sys.argv[2:])
         _, collection, mem_config = init_memory()
         chat_config = load_json(CHAT_CONFIG_FILE, DEFAULT_CHAT_CONFIG)
-        
+        api_key = _get_chat_api_key(chat_config)
+
+        if not api_key:
+            print("❌ 请配置 API Key")
+            return
+
         max_items = mem_config.get("max_memory_items", 5)
         max_chars = mem_config.get("max_memory_chars", 200)
-        
+
         # 搜索记忆
         memories = search_memories(collection, question, n_results=max_items)
-        
+
         # 调用 LLM
         answer = chat_with_memory(
             chat_config["api_base"],
-            chat_config["api_key"],
+            api_key,
             chat_config["model"],
             question,
             memories,
@@ -425,21 +462,21 @@ def main():
             max_memory_items=max_items,
             max_memory_chars=max_chars
         )
-        
+
         print(f"\n问题: {question}")
         print(f"\n答案: {answer}")
-        
+
         # 自动保存
         if collection:
             add_memory(collection, f"用户: {question}", "dialogue")
             add_memory(collection, f"AI: {answer}", "dialogue")
-    
+
     # 添加记忆
     elif command == "remember":
         if len(sys.argv) < 3:
             print("❌ 请提供记忆内容")
             return
-        
+
         content = " ".join(sys.argv[2:])
         _, collection, _ = init_memory()
         if collection:
@@ -450,7 +487,7 @@ def main():
                 print("❌ 添加记忆失败")
         else:
             print("❌ 记忆系统未初始化")
-    
+
     # 列出所有记忆
     elif command == "list":
         try:
@@ -461,7 +498,7 @@ def main():
                 name=config.get("collection_name", COLLECTION_NAME),
                 embedding_function=embedding_fn
             )
-            
+
             results = collection.get(limit=100)
             if results and results.get("documents"):
                 print(f"\n📚 共有 {len(results['documents'])} 条记忆:\n")
@@ -472,31 +509,36 @@ def main():
             else:
                 print("📭 暂无记忆")
         except Exception as e:
+            logger.error(f"列出记忆失败: {e}")
             print(f"❌ 列出记忆失败: {e}")
-    
+
     # 查看配置
     elif command == "config":
-        print("📋 记忆系统配置 v0.2.0")
+        print("📋 记忆系统配置 v0.3.0")
         mem_config = load_json(MEMORY_CONFIG_FILE, DEFAULT_MEMORY_CONFIG)
         chat_config = load_json(CHAT_CONFIG_FILE, DEFAULT_CHAT_CONFIG)
-        
+
         print("\n[记忆配置]")
         for k, v in mem_config.items():
             if k == "openai_api_key" and v:
-                v = v[:10] + "..." + v[-4:]
+                v = _mask_key(v)
             print(f"  {k}: {v}")
-        
+
         print("\n[对话配置]")
         for k, v in chat_config.items():
             if k == "api_key" and v:
-                v = v[:10] + "..." + v[-4:]
+                v = _mask_key(v)
             print(f"  {k}: {v}")
-        
+
+        env_api_key = os.environ.get("HERMES_CHAT_API_KEY")
+        if env_api_key:
+            print(f"\n[环境变量] HERMES_CHAT_API_KEY: {_mask_key(env_api_key)} (active)")
+
         print(f"\n📁 记忆存储: {MEMORY_DIR}")
         print(f"📄 记忆配置: {MEMORY_CONFIG_FILE}")
         print(f"📄 对话配置: {CHAT_CONFIG_FILE}")
         print(f"📚 集合名称: {COLLECTION_NAME}")
-    
+
     else:
         print(f"❌ 未知命令: {command}")
 

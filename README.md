@@ -125,7 +125,7 @@ Hermes 检测到可能需要记忆
     ↓
 执行 Python 查询 ChromaDB
     ↓
-找到相关记忆（相关性 > 30%）
+找到相关记忆（相似度参考阈值可自行调整）
     ↓
 将记忆融入回答
     ↓
@@ -175,6 +175,8 @@ export HERMES_MEMORY_DIR="$HOME/.hermes/memory_db"
 | `HERMES_EXPORT_DIR` | `~/.hermes/exports` | 会话导出目录 |
 | `HERMES_MEMORY_CONFIG` | `~/.hermes/memory_config.json` | 记忆配置路径 |
 | `HERMES_CHAT_CONFIG` | `~/.hermes/chat_config.json` | 对话配置路径 |
+| `HERMES_CHAT_API_KEY` | 空 | 对话 API Key，优先于配置文件 |
+| `HERMES_OPENAI_API_KEY` | 空 | OpenAI Embedding API Key |
 
 ### Embedding 模式
 
@@ -187,12 +189,14 @@ export HERMES_MEMORY_DIR="$HOME/.hermes/memory_db"
 
 在 `memory_ai.py init-memory` 时选择，或手动编辑 `~/.hermes/memory_config.json`。
 
-### 隐私说明
+### 安全说明
 
 - 所有数据**仅存储在本地**
 - 不会发送到任何第三方服务
 - Embedding 模型在本地运行
 - 你可以随时删除 `memory_db` 文件夹清除所有记忆
+- **API Key 建议使用环境变量**，避免明文保存在配置文件中
+- 如必须保存到文件，请确保文件权限适当（如仅当前用户可读）
 
 ### 故障排查
 
@@ -203,6 +207,7 @@ export HERMES_MEMORY_DIR="$HOME/.hermes/memory_db"
 | cron 任务不执行 | 检查 `hermes cron status`，Gateway 需运行 |
 | 中文语义不准 | 当前 Embedding 模型英文训练，中文精度有限 |
 | 路径错误 | 检查环境变量 `HERMES_EXPORT_DIR` |
+| 状态文件损坏 | 删除 `archive_state.json`，下次运行会自动重建 |
 
 ### 对比 Hermes 原生记忆插件
 
